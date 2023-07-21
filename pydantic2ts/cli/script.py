@@ -193,6 +193,7 @@ def generate_typescript_defs(
     logger.info("Finding pydantic models...")
 
     models = extract_pydantic_models(import_module(module))
+    models = [m for m in models if not hasattr(m, "_pydantic2ts_include") or m._pydantic2ts_include is True]
 
     if exclude:
         models = [m for m in models if m.__name__ not in exclude]
@@ -202,6 +203,8 @@ def generate_typescript_defs(
     schema = generate_json_schema(models)
     schema_dir = mkdtemp()
     schema_file_path = os.path.join(schema_dir, "schema.json")
+
+    logger.info("Writing JSON schema to %s", schema_file_path)
 
     with open(schema_file_path, "w") as f:
         f.write(schema)
