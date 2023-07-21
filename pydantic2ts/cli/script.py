@@ -4,6 +4,7 @@ import inspect
 import json
 import logging
 import os
+import pkgutil
 import shutil
 import sys
 from importlib.util import module_from_spec, spec_from_file_location
@@ -12,7 +13,7 @@ from types import ModuleType
 from typing import Any, Dict, List, Tuple, Type
 from uuid import uuid4
 
-from pydantic import BaseModel, Extra, create_model
+from pydantic import BaseModel, create_model
 
 try:
     from pydantic.generics import GenericModel
@@ -47,15 +48,6 @@ def import_module(path: str) -> ModuleType:
         raise e
 
 
-def is_submodule(obj, module_name: str) -> bool:
-    """
-    Return true if an object is a submodule
-    """
-    return inspect.ismodule(obj) and getattr(obj, "__name__", "").startswith(
-        f"{module_name}."
-    )
-
-
 def is_concrete_pydantic_model(obj) -> bool:
     """
     Return true if an object is a concrete subclass of pydantic's BaseModel.
@@ -81,10 +73,12 @@ def extract_pydantic_models(module: ModuleType) -> List[Type[BaseModel]]:
     for _, model in inspect.getmembers(module, is_concrete_pydantic_model):
         models.append(model)
 
-    for _, submodule in inspect.getmembers(
-        module, lambda obj: is_submodule(obj, module_name)
-    ):
-        models.extend(extract_pydantic_models(submodule))
+    # if no __path__, assume not a package per
+    # https://docs.python.org/3/reference/import.html#path__
+    if hasattr(module, '__path__'):
+        for submodule in pkgutil.iter_modules(module.__path__):
+            imported = import_module(f"{module.__name__}.{submodule.name}")
+            models.extend(extract_pydantic_models(imported))
 
     return models
 
@@ -152,18 +146,18 @@ def generate_json_schema(models: List[Type[BaseModel]]) -> str:
     '[k: string]: any' from being added to every interface. This change is reverted
     once the schema has been generated.
     """
-    model_extras = [getattr(m.Config, "extra", None) for m in models]
+    model_extras = [m.model_config.get("extra") for m in models]
 
     try:
         for m in models:
-            if getattr(m.Config, "extra", None) != Extra.allow:
-                m.Config.extra = Extra.forbid
+            if m.model_config.get("extra") != 'allow':
+                m.model_config["extra"] = 'forbid'
 
         master_model = create_model(
             "_Master_", **{m.__name__: (m, ...) for m in models}
         )
-        master_model.Config.extra = Extra.forbid
-        master_model.Config.schema_extra = staticmethod(clean_schema)
+        master_model.model_config["extra"] = 'forbid'
+        master_model.model_config["json_schema_extra"] = staticmethod(clean_schema)
 
         schema = json.loads(master_model.schema_json())
 
@@ -175,7 +169,7 @@ def generate_json_schema(models: List[Type[BaseModel]]) -> str:
     finally:
         for m, x in zip(models, model_extras):
             if x is not None:
-                m.Config.extra = x
+                m.model_config["extra"] = x
 
 
 def generate_typescript_defs(
