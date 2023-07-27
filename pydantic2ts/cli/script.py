@@ -118,6 +118,14 @@ def clean_output_file(output_filename: str) -> None:
         f.writelines(new_lines)
 
 
+def _add_ts_type(prop: dict[str, Any]) -> None:
+    if prop.get("format") == "date-time":
+        prop["tsType"] = "Date"
+
+    for sub in prop.get("anyOf", []):
+        _add_ts_type(sub)
+
+
 def clean_schema(schema: Dict[str, Any]) -> None:
     """
     Clean up the resulting JSON schemas by:
@@ -127,12 +135,16 @@ def clean_schema(schema: Dict[str, Any]) -> None:
        resulting typescript file (which is a LOT of unnecessary noise).
     2) Getting rid of the useless "An enumeration." description applied to Enums
        which don't have a docstring.
+    3) Annotate specific types with tsType property, e.g. datetime
     """
     for prop in schema.get("properties", {}).values():
         prop.pop("title", None)
 
     if "enum" in schema and schema.get("description") == "An enumeration.":
         del schema["description"]
+
+    for prop in schema.get("properties", {}).values():
+        _add_ts_type(prop)
 
 
 def generate_json_schema(models: List[Type[BaseModel]]) -> str:
@@ -161,7 +173,7 @@ def generate_json_schema(models: List[Type[BaseModel]]) -> str:
 
         schema = json.loads(master_model.schema_json())
 
-        for d in schema.get("definitions", {}).values():
+        for d in schema.get("$defs", {}).values():
             clean_schema(d)
 
         return json.dumps(schema, indent=2)
